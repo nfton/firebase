@@ -1,0 +1,8 @@
+{
+  "name": "nfton",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "repository": "git@github.com:nfton/firebase.git",
+  "author": "Jakhongir <tashpulatov.jakhongir@gmail.com>",
+  "license": "MIT"
+}
