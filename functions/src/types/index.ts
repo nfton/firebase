@@ -19,13 +19,17 @@ export enum ColorsResult {
 	RED,
 	BLUE,
 	BLACK,
-	WHITE,
 	GREEN,
 	ORANGE,
 }
 
 export interface Game {
 	type: GameType
+}
+
+export interface Join {
+	type: GameType
+	player: Player
 }
 
 export interface ColorsGameResult {

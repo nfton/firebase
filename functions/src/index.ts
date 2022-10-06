@@ -1,18 +1,14 @@
 import * as functions from "firebase-functions";
 import {Telegraf} from 'telegraf'
-import {ColorsGame, Game, GameType} from "./types";
+import {ColorsGame, GameType, Join} from "./types";
 import * as admin from "firebase-admin"
 import {createNewColorGame} from "./games/colors";
-import {Configuration, RawBlockchainApi} from "tonapi-sdk-js";
+import TonWeb from "tonweb";
 
 require("buffer");
 
-const blockchain = new RawBlockchainApi(new Configuration({
-	headers: {
-		// To get unlimited requests
-		Authorization: 'Bearer 5cbe41787f6dbe5c6faa4950ba286792874c8e8ff5b085602bab417f6eb306f5',
-	},
-}))
+
+const tonweb = new TonWeb();
 
 
 admin.initializeApp();
@@ -24,7 +20,7 @@ bot.use(async (ctx, next) => {
 	let userRef = admin.firestore().collection("users").doc(ctx.from?.id.toString() || "")
 	let userDoc = await userRef.get()
 	if (!userDoc.exists) {
-		await userRef.set({...(ctx.from || {}), is_new: true, nts: 0})
+		await userRef.set({...(ctx.from || {}), is_new: true, nts: 1000})
 	}
 	return next()
 })
@@ -52,20 +48,18 @@ bot.hears('My wallet', async (ctx) => {
 		})
 		return;
 	}
-
 })
 
 bot.command('setwallet', async (ctx) => {
 	let userDoc = await admin.firestore().collection('users').doc(ctx.from.id.toString()).get()
 	let wallet = ctx.message.text.split(' ')[1]
 	try {
-		let account = await blockchain.getAccount({account: wallet})
-		let result = account.balance
+		let result = await tonweb.getBalance(wallet)
 		await admin.firestore().collection('users').doc(ctx.from.id.toString()).update({wallet})
 		if (userDoc.get('is_new') === true) {
 			// todo: send NTS to wallet
 			await admin.firestore().collection('users').doc(ctx.from.id.toString()).update({nts: admin.firestore.FieldValue.increment(100)})
-			await ctx.reply('[Not Actually] We just transferred you *100 NTS token* to play some games and earn some more', {parse_mode: "Markdown"})
+			await ctx.reply('*[Not Actually]* We just transferred you *100 NTS token* to play some games and earn some more', {parse_mode: "Markdown"})
 
 		}
 		ctx.reply("*Saved!* Your balance is " + Number(result) / 1000000000 + " TON", {
@@ -73,9 +67,9 @@ bot.command('setwallet', async (ctx) => {
 			reply_markup: {keyboard: [['My wallet']], resize_keyboard: true}
 		})
 	} catch (e: any) {
+		console.error(e);
 		ctx.reply('There seems to be an error. Try again or another wallet')
 		// not a wallet
-		console.error(e);
 	}
 })
 
@@ -88,14 +82,51 @@ export const telegramBot = functions
 		})
 	})
 
-
-export const createNewGame = functions
+export const sendGame = functions
 	.region('europe-west3')
 	.https
-	.onCall(async (data: Game) => {
+	.onCall(async (data) => {
+		await bot.telegram.sendMessage(data.id, "You have a new Game. Play it before expires", {
+			reply_markup: {
+				inline_keyboard: [[{
+					text: 'Play',
+					web_app: {url: data.url}
+				}]]
+			}
+		})
+	})
+
+export const gameOver = functions
+	.region('europe-west3')
+	.https
+	.onCall(async (data) => {
+		let res = await admin.firestore().collection("users").doc(data.player.toString()).collection('games').get()
+		res.forEach(e => e.ref.delete())
+		await admin.firestore().collection("game_colors").doc(data.game).delete()
+	})
+
+export const joinWaitRoom = functions
+	.region('europe-west3')
+	.runWith({maxInstances: 1})
+	.https
+	.onCall(async (data: Join): Promise<any> => {
 		console.log(data)
 		if (data.type === GameType.COLORS.toString()) {
-			await createNewColorGame(data as ColorsGame)
+			let waitRoomRef = admin.firestore().collection("wait_room_colors")
+			if ((await waitRoomRef.doc(data.player.id.toString()).get()).exists ||
+				(await admin.firestore().collection("users").doc(data.player.id.toString()).collection('games').where("type", "==", "COLORS").get()).docs.length > 0) {
+				return false
+			}
+			await admin.firestore().collection("users").doc(data.player.id.toString()).update({nts: admin.firestore.FieldValue.increment(-50)})
+			let users = await waitRoomRef.get()
+			if (users.docs.length === 0) {
+				await waitRoomRef.doc(data.player.id.toString()).set({player: data.player})
+				return true
+			} else if (users.docs.length === 1 && users.docs[0].data().player.id !== data.player.id) {
+				await waitRoomRef.doc(users.docs[0].id).delete()
+				await createNewColorGame({players: [users.docs[0].data().player, data.player]} as ColorsGame)
+				return true
+			}
 		}
 	})
 
